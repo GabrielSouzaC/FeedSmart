@@ -1,0 +1,7 @@
+nome,email,produto,avaliacao_produto,avaliacao_entrega,avaliacao_atendimento,comentario,data
+amanda,amanda@email.com,camisa ,5,5,3,atendimento ruim,2025-05-05 20:33:10
+gabriel,gabriel@gmail.com,camiseta,5,2,4,camiseta boa,2025-05-06 08:30:32
+joao,joao@gmail.com,calça,5,2,3,"calça boa, mas atendimento ruim",2025-05-06 08:32:26
+junior,junior@gmail.com,camisa,1,1,1,ruim,2025-05-12 20:09:15
+gabriel,gabriel@gmail.com,camisa,4,2,3,...,2025-05-12 21:16:18
+a,a@email.com,short,3,2,3,,2025-05-12 21:21:44
