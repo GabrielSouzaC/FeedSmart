@@ -115,7 +115,7 @@ if 'page' not in st.session_state:
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'current_feedback' not in st.session_state:
-    st.session_state.current_feedback = {"stage": 0, "rating": None, "comment": None}
+    st.session_state.current_feedback = {"stage": 0, "product": None, "product_rating": None, "delivery_rating": None, "comment": None}
 
 # Função para mudar de página
 def change_page(page):
@@ -126,50 +126,75 @@ def logout():
     st.session_state.user = None
     st.session_state.page = 'login'
     st.session_state.chat_history = []
-    st.session_state.current_feedback = {"stage": 0, "rating": None, "comment": None}
+    st.session_state.current_feedback = {"stage": 0, "product": None, "product_rating": None, "delivery_rating": None, "comment": None}
 
 # Função para processar a entrada do chatbot
 def process_chat_input(user_input):
     feedback = st.session_state.current_feedback
     
     if feedback["stage"] == 0:
-        # Iniciar conversa
-        st.session_state.chat_history.append({"role": "assistant", "content": "Olá! Gostaria de coletar seu feedback. Em uma escala de 0 a 5, como você avaliaria nossa plataforma?"})
+        # Iniciar conversa com boas-vindas
+        st.session_state.chat_history.append({"role": "assistant", "content": "Olá! Bem-vindo ao nosso sistema de feedback. Estamos felizes em tê-lo aqui!"})
+        st.session_state.chat_history.append({"role": "assistant", "content": "Qual produto você adquiriu recentemente?"})
         feedback["stage"] = 1
     elif feedback["stage"] == 1:
-        # Processar avaliação
+        # Processar seleção de produto
+        feedback["product"] = user_input
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        st.session_state.chat_history.append({"role": "assistant", "content": f"Ótimo! Você adquiriu {user_input}. Em uma escala de 0 a 5, como você avaliaria a qualidade deste produto?"})
+        feedback["stage"] = 2
+    elif feedback["stage"] == 2:
+        # Processar avaliação do produto
         try:
             rating = int(user_input)
             if 0 <= rating <= 5:
-                feedback["rating"] = rating
+                feedback["product_rating"] = rating
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
-                st.session_state.chat_history.append({"role": "assistant", "content": f"Obrigado pela avaliação de {rating}/5! Você gostaria de adicionar algum comentário sobre sua experiência?"})
-                feedback["stage"] = 2
+                st.session_state.chat_history.append({"role": "assistant", "content": f"Obrigado pela avaliação de {rating}/5 para o produto! Agora, em uma escala de 0 a 5, como você avaliaria o prazo de entrega?"})
+                feedback["stage"] = 3
             else:
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
                 st.session_state.chat_history.append({"role": "assistant", "content": "Por favor, forneça uma avaliação entre 0 e 5."})
         except ValueError:
             st.session_state.chat_history.append({"role": "user", "content": user_input})
             st.session_state.chat_history.append({"role": "assistant", "content": "Por favor, forneça um número entre 0 e 5 para sua avaliação."})
-    elif feedback["stage"] == 2:
+    elif feedback["stage"] == 3:
+        # Processar avaliação do prazo de entrega
+        try:
+            rating = int(user_input)
+            if 0 <= rating <= 5:
+                feedback["delivery_rating"] = rating
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                st.session_state.chat_history.append({"role": "assistant", "content": f"Obrigado pela avaliação de {rating}/5 para o prazo de entrega! Você gostaria de adicionar algum comentário sobre sua experiência?"})
+                feedback["stage"] = 4
+            else:
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                st.session_state.chat_history.append({"role": "assistant", "content": "Por favor, forneça uma avaliação entre 0 e 5."})
+        except ValueError:
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
+            st.session_state.chat_history.append({"role": "assistant", "content": "Por favor, forneça um número entre 0 e 5 para sua avaliação."})
+    elif feedback["stage"] == 4:
         # Processar comentário
         feedback["comment"] = user_input
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         
+        # Calcular média das avaliações
+        avg_rating = (feedback["product_rating"] + feedback["delivery_rating"]) / 2
+        
         # Salvar feedback no banco de dados
-        save_feedback(st.session_state.user["id"], feedback["rating"], feedback["comment"])
+        save_feedback(st.session_state.user["id"], avg_rating, f"Produto: {feedback['product']} | Avaliação do produto: {feedback['product_rating']}/5 | Avaliação da entrega: {feedback['delivery_rating']}/5 | Comentário: {feedback['comment']}")
         
         st.session_state.chat_history.append({"role": "assistant", "content": "Obrigado pelo seu feedback! Ele foi registrado com sucesso. Deseja fornecer outro feedback? (sim/não)"})
-        feedback["stage"] = 3
-    elif feedback["stage"] == 3:
+        feedback["stage"] = 5
+    elif feedback["stage"] == 5:
         # Verificar se o usuário quer dar outro feedback
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         if user_input.lower() in ["sim", "s", "yes", "y"]:
-            st.session_state.chat_history.append({"role": "assistant", "content": "Ótimo! Em uma escala de 0 a 5, como você avaliaria nossa plataforma?"})
-            st.session_state.current_feedback = {"stage": 1, "rating": None, "comment": None}
+            st.session_state.chat_history.append({"role": "assistant", "content": "Ótimo! Qual produto você adquiriu recentemente?"})
+            st.session_state.current_feedback = {"stage": 1, "product": None, "product_rating": None, "delivery_rating": None, "comment": None}
         else:
             st.session_state.chat_history.append({"role": "assistant", "content": "Obrigado por participar! Se quiser ver seus feedbacks anteriores, acesse a seção de Dashboard."})
-            st.session_state.current_feedback = {"stage": 0, "rating": None, "comment": None}
+            st.session_state.current_feedback = {"stage": 0, "product": None, "product_rating": None, "delivery_rating": None, "comment": None}
 
 # Página de Login
 def login_page():
@@ -255,11 +280,22 @@ def chatbot_page():
                 message(chat["content"], is_user=False, key=f"msg_{i}")
     
     # Input do usuário
-    user_input = st.text_input("Digite sua mensagem:", key="user_input")
-    
-    if st.button("Enviar") and user_input:
-        process_chat_input(user_input)
-        st.rerun()
+    if st.session_state.current_feedback["stage"] == 1:
+        # Mostrar seleção de produto
+        product_options = ["Camiseta", "Shorts", "Calça", "Tênis"]
+        user_input = st.selectbox("Selecione o produto:", product_options)
+        submit_button = st.button("Enviar")
+        
+        if submit_button:
+            process_chat_input(user_input)
+            st.rerun()
+    else:
+        # Input de texto normal
+        user_input = st.text_input("Digite sua mensagem:", key="user_input")
+        
+        if st.button("Enviar") and user_input:
+            process_chat_input(user_input)
+            st.rerun()
 
 # Página de dashboard
 def dashboard_page():
@@ -282,40 +318,19 @@ def dashboard_page():
         # Mostrar estatísticas
         st.subheader("Estatísticas de Feedback")
         
-        col1, col2 = st.columns(2)
+        # Avaliação média
+        avg_rating = feedbacks['rating'].mean()
+        st.metric("Avaliação Média", f"{avg_rating:.1f}/5")
         
-        with col1:
-            avg_rating = feedbacks['rating'].mean()
-            st.metric("Avaliação Média", f"{avg_rating:.1f}/5")
-            
-            # Gráfico de distribuição de avaliações
-            fig, ax = plt.subplots(figsize=(10, 6))
-            feedbacks['rating'].value_counts().sort_index().plot(kind='bar', ax=ax)
-            ax.set_title('Distribuição de Avaliações')
-            ax.set_xlabel('Avaliação')
-            ax.set_ylabel('Contagem')
-            ax.set_xticks(range(6))
-            ax.set_xticklabels(['0', '1', '2', '3', '4', '5'])
-            st.pyplot(fig)
-        
-        with col2:
-            total_feedbacks = len(feedbacks)
-            st.metric("Total de Feedbacks", total_feedbacks)
-            
-            # Gráfico de avaliações ao longo do tempo
-            feedbacks['timestamp'] = pd.to_datetime(feedbacks['timestamp'])
-            feedbacks.set_index('timestamp', inplace=True)
-            
-            # Resample por dia e calcular média
-            daily_avg = feedbacks['rating'].resample('D').mean().fillna(0)
-            
-            fig, ax = plt.subplots(figsize=(10, 6))
-            daily_avg.plot(ax=ax)
-            ax.set_title('Avaliação Média por Dia')
-            ax.set_xlabel('Data')
-            ax.set_ylabel('Avaliação Média')
-            ax.set_ylim(0, 5)
-            st.pyplot(fig)
+        # Gráfico de distribuição de avaliações
+        fig, ax = plt.subplots(figsize=(10, 6))
+        feedbacks['rating'].value_counts().sort_index().plot(kind='bar', ax=ax)
+        ax.set_title('Distribuição de Avaliações')
+        ax.set_xlabel('Avaliação')
+        ax.set_ylabel('Contagem')
+        ax.set_xticks(range(6))
+        ax.set_xticklabels(['0', '1', '2', '3', '4', '5'])
+        st.pyplot(fig)
         
         # Tabela de feedbacks
         st.subheader("Seus Feedbacks")
