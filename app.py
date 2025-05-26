@@ -198,7 +198,7 @@ def process_chat_input(user_input):
 
 # Página de Login
 def login_page():
-    st.title("Sistema de Feedback - Login")
+    st.title("FeedSmart - Login")
     
     tab1, tab2 = st.tabs(["Login", "Registrar"])
     
