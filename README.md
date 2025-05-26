@@ -112,8 +112,8 @@ Inclua aqui prints, gifs ou vídeos mostrando a interface ou o funcionamento do 
 | Nome | GitHub |
 |------|--------|
 | Gabriel Souza de Carvalho  | [@GabrielSouzaC](https://github.com/GabrielSouzaC) |
-| Carlos Eduardo Laera Prado | [@fulano](https://github.com/fulano) |
-|   | [@ciclano](https://github.com/ciclano) |
+| Carlos Eduardo Laera Prado | [@CarlosLaera](https://github.com/CarlosLaera) |
+| Pedro Henrique dos Santos | [@pedrohenrys](https://github.com/pedrohenrys) |
 
 ---
 
