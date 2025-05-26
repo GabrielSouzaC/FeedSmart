@@ -8,10 +8,11 @@ import os
 import datetime
 import time
 import uuid
+import re
 from streamlit_chat import message
 
 # Configuração da página
-st.set_page_config(page_title="Sistema de Feedback", layout="wide")
+st.set_page_config(page_title="FeedSmart - Sistema de Feedback", layout="wide", page_icon="🤖")
 
 # ==================== ESTRUTURAS DE DADOS INTEGRADAS ====================
 
@@ -61,13 +62,24 @@ class FeedbackQueue:
     
     def process_next(self):
         """
-        Processa o próximo feedback na fila.
-        Este método pode ser expandido para realizar ações específicas com o feedback.
+        Processa o próximo feedback na fila baseado na prioridade.
+        Remove e retorna o item com maior prioridade.
         """
-        next_feedback = self.dequeue()
-        if next_feedback:
-            return next_feedback
-        return None
+        if self.is_empty():
+            return None
+        
+        # Encontrar item com maior prioridade (maior número = maior prioridade)
+        max_priority_index = 0
+        for i in range(1, len(self.items)):
+            if self.items[i]['priority'] > self.items[max_priority_index]['priority']:
+                max_priority_index = i
+        
+        # Remover e retornar o item de maior prioridade
+        return self.items.pop(max_priority_index)
+    
+    def get_sorted_by_priority(self):
+        """Retorna itens ordenados por prioridade (maior prioridade primeiro)."""
+        return sorted(self.items, key=lambda x: x['priority'], reverse=True)
 
 # ==================== ALGORITMOS DE ORDENAÇÃO INTEGRADOS ====================
 
@@ -76,17 +88,21 @@ def merge_sort_by_rating(arr):
     Implementação do algoritmo Merge Sort para ordenar índices com base nos valores de avaliação.
     Retorna uma lista de índices ordenados do maior para o menor valor.
     
+    Complexidade: O(n log n)
+    Tipo: Divisão e conquista
+    Estável: Sim
+    
     Args:
         arr: Lista de valores de avaliação
         
     Returns:
-        Lista de índices ordenados
+        Lista de índices ordenados (maior para menor)
     """
     # Criar lista de tuplas (valor, índice)
     indexed_arr = [(arr[i], i) for i in range(len(arr))]
     
-    # Função interna para dividir e conquistar
     def merge_sort(arr):
+        """Função recursiva principal do merge sort."""
         if len(arr) <= 1:
             return arr
         
@@ -98,15 +114,14 @@ def merge_sort_by_rating(arr):
         # Conquistar (mesclar)
         return merge(left, right)
     
-    # Função para mesclar duas listas ordenadas
     def merge(left, right):
+        """Função para mesclar duas listas ordenadas."""
         result = []
         i = j = 0
         
         # Mesclar ordenando do maior para o menor (ordem decrescente)
         while i < len(left) and j < len(right):
-            # Comparar os valores (primeiro elemento da tupla)
-            if left[i][0] >= right[j][0]:
+            if left[i][0] >= right[j][0]:  # Comparar valores
                 result.append(left[i])
                 i += 1
             else:
@@ -127,8 +142,8 @@ def merge_sort_by_rating(arr):
 
 # ==================== BANCO DE DADOS ====================
 
-# Inicializar banco de dados
 def init_db():
+    """Inicializa o banco de dados e cria as tabelas necessárias."""
     conn = sqlite3.connect('feedback_app.db')
     c = conn.cursor()
     
@@ -148,7 +163,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS feedback (
         id TEXT PRIMARY KEY,
         user_id TEXT,
-        rating INTEGER,
+        rating REAL,
         comment TEXT,
         timestamp TEXT,
         priority INTEGER DEFAULT 0,
@@ -156,23 +171,40 @@ def init_db():
     )
     ''')
     
-    # Verificar se a coluna priority existe e adicioná-la se necessário
+    # Sistema de migração: Verificar se a coluna priority existe
     try:
         c.execute("SELECT priority FROM feedback LIMIT 1")
     except sqlite3.OperationalError:
         # Coluna priority não existe, vamos adicioná-la
         c.execute("ALTER TABLE feedback ADD COLUMN priority INTEGER DEFAULT 0")
-        print("Coluna 'priority' adicionada à tabela feedback")
+        print("✅ Migração: Coluna 'priority' adicionada à tabela feedback")
+    
+    # Criar índices para melhor performance
+    try:
+        c.execute("CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_feedback_timestamp ON feedback(timestamp)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_feedback_priority ON feedback(priority)")
+    except sqlite3.Error as e:
+        print(f"Aviso: Erro ao criar índices: {e}")
     
     conn.commit()
     conn.close()
 
-# Função para hash de senha
 def hash_password(password):
+    """Criptografa uma senha usando SHA-256."""
     return hashlib.sha256(password.encode()).hexdigest()
 
-# Função para verificar login
 def verify_login(username, password):
+    """
+    Verifica as credenciais de login do usuário.
+    
+    Args:
+        username (str): Nome de usuário
+        password (str): Senha em texto plano
+        
+    Returns:
+        dict or None: Dados do usuário se válido, None se inválido
+    """
     conn = sqlite3.connect('feedback_app.db')
     c = conn.cursor()
     
@@ -181,11 +213,42 @@ def verify_login(username, password):
     conn.close()
     
     if result and result[1] == hash_password(password):
-        return {"id": result[0], "name": result[2]}
+        return {"id": result[0], "name": result[2], "username": username}
     return None
 
-# Função para registrar novo usuário
 def register_user(username, password, name, email):
+    """
+    Registra um novo usuário no sistema com validação completa.
+    
+    Args:
+        username (str): Nome de usuário único
+        password (str): Senha em texto plano
+        name (str): Nome completo
+        email (str): Email do usuário
+        
+    Returns:
+        tuple: (success, message)
+    """
+    # Validação de email usando regex
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    
+    if not re.match(email_pattern, email):
+        return False, "Email inválido. Use o formato: exemplo@dominio.com"
+    
+    # Validações adicionais
+    if not all([username, password, name, email]):
+        return False, "Todos os campos são obrigatórios"
+    
+    if len(password) < 6:
+        return False, "A senha deve ter pelo menos 6 caracteres"
+    
+    if len(username) < 3:
+        return False, "O nome de usuário deve ter pelo menos 3 caracteres"
+    
+    if len(name) < 2:
+        return False, "O nome deve ter pelo menos 2 caracteres"
+    
+    # Conectar ao banco de dados
     conn = sqlite3.connect('feedback_app.db')
     c = conn.cursor()
     
@@ -197,20 +260,34 @@ def register_user(username, password, name, email):
         )
         conn.commit()
         conn.close()
-        return True
+        return True, "Usuário registrado com sucesso!"
+        
     except sqlite3.IntegrityError:
         conn.close()
-        return False
+        return False, "Nome de usuário já existe. Escolha outro."
+    except Exception as e:
+        conn.close()
+        return False, f"Erro inesperado: {str(e)}"
 
-# Função para salvar feedback (ATUALIZADA com fila)
 def save_feedback(user_id, rating, comment):
+    """
+    Salva um feedback no banco de dados e adiciona na fila de processamento.
+    
+    Args:
+        user_id (str): ID do usuário
+        rating (float): Avaliação média
+        comment (str): Comentário do feedback
+        
+    Returns:
+        str: ID do feedback criado
+    """
     conn = sqlite3.connect('feedback_app.db')
     c = conn.cursor()
     
     feedback_id = str(uuid.uuid4())
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Determinar prioridade baseada na avaliação (avaliações baixas têm prioridade maior)
+    # Calcular prioridade baseada na avaliação (avaliações baixas = prioridade alta)
     priority = 6 - int(rating)  # Avaliação 1 = prioridade 5, Avaliação 5 = prioridade 1
     
     c.execute(
@@ -236,20 +313,45 @@ def save_feedback(user_id, rating, comment):
     conn.close()
     return feedback_id
 
-# Função para obter todos os feedbacks de um usuário (ATUALIZADA com ordenação)
 def get_user_feedbacks(user_id, sort_method='timestamp'):
+    """
+    Obtém todos os feedbacks de um usuário com opção de ordenação.
+    
+    Args:
+        user_id (str): ID do usuário
+        sort_method (str): 'timestamp' ou 'rating'
+        
+    Returns:
+        pandas.DataFrame: Feedbacks do usuário
+    """
     conn = sqlite3.connect('feedback_app.db')
-    df = pd.read_sql_query("SELECT * FROM feedback WHERE user_id = ? ORDER BY timestamp DESC", 
-                          conn, params=(user_id,))
+    df = pd.read_sql_query(
+        "SELECT * FROM feedback WHERE user_id = ? ORDER BY timestamp DESC", 
+        conn, params=(user_id,)
+    )
     conn.close()
     
+    # Aplicar ordenação por avaliação usando Merge Sort se solicitado
     if len(df) > 0 and sort_method == 'rating':
-        # Usar o algoritmo de merge sort customizado
         ratings = df['rating'].tolist()
         sorted_indices = merge_sort_by_rating(ratings)
         df = df.iloc[sorted_indices].reset_index(drop=True)
     
     return df
+
+# ==================== CONFIGURAÇÕES E CONSTANTES ====================
+
+# Produtos disponíveis
+PRODUCTS = ["Camiseta", "Shorts", "Calça", "Tênis"]
+
+# Mapeamento de prioridades
+PRIORITY_LABELS = {
+    5: "🔴 CRÍTICA",
+    4: "🟠 ALTA", 
+    3: "🟡 MÉDIA",
+    2: "🔵 BAIXA",
+    1: "🟢 MUITO BAIXA"
+}
 
 # ==================== ESTADO DA SESSÃO ====================
 
@@ -264,40 +366,82 @@ if 'page' not in st.session_state:
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'current_feedback' not in st.session_state:
-    st.session_state.current_feedback = {"stage": 0, "product": None, "product_rating": None, "delivery_rating": None, "comment": None}
+    st.session_state.current_feedback = {
+        "stage": 0, 
+        "product": None, 
+        "product_rating": None, 
+        "delivery_rating": None, 
+        "comment": None
+    }
 if 'feedback_queue' not in st.session_state:
     st.session_state.feedback_queue = FeedbackQueue()
 
 # ==================== FUNÇÕES DE NAVEGAÇÃO ====================
 
-# Função para mudar de página
 def change_page(page):
+    """Muda para uma página específica."""
     st.session_state.page = page
+    st.rerun()
     
-# Função para fazer logout
 def logout():
+    """Realiza logout do usuário limpando a sessão."""
     st.session_state.user = None
     st.session_state.page = 'login'
     st.session_state.chat_history = []
-    st.session_state.current_feedback = {"stage": 0, "product": None, "product_rating": None, "delivery_rating": None, "comment": None}
+    st.session_state.current_feedback = {
+        "stage": 0, 
+        "product": None, 
+        "product_rating": None, 
+        "delivery_rating": None, 
+        "comment": None
+    }
+    st.rerun()
+
+def clear_chat_history():
+    """Limpa o histórico do chat e reinicia a conversa."""
+    st.session_state.chat_history = []
+    st.session_state.current_feedback = {
+        "stage": 0, 
+        "product": None, 
+        "product_rating": None, 
+        "delivery_rating": None, 
+        "comment": None
+    }
 
 # ==================== PROCESSAMENTO DO CHATBOT ====================
 
-# Função para processar a entrada do chatbot
 def process_chat_input(user_input):
+    """
+    Processa a entrada do usuário no chatbot baseado no estágio atual.
+    
+    Args:
+        user_input (str): Entrada do usuário
+    """
     feedback = st.session_state.current_feedback
     
     if feedback["stage"] == 0:
         # Iniciar conversa com boas-vindas
-        st.session_state.chat_history.append({"role": "assistant", "content": "Olá! Bem-vindo ao nosso sistema de feedback. Estamos felizes em tê-lo aqui!"})
-        st.session_state.chat_history.append({"role": "assistant", "content": "Qual produto você adquiriu recentemente?"})
+        welcome_msg = f"Olá, {st.session_state.user['name']}! 👋\n\nSou o assistente de feedback da nossa loja. Vou te ajudar a avaliar sua experiência de compra.\n\nQual produto você gostaria de avaliar?"
+        st.session_state.chat_history.append({"role": "assistant", "content": welcome_msg})
         feedback["stage"] = 1
+        
     elif feedback["stage"] == 1:
         # Processar seleção de produto
-        feedback["product"] = user_input
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
-        st.session_state.chat_history.append({"role": "assistant", "content": f"Ótimo! Você adquiriu {user_input}. Em uma escala de 0 a 5, como você avaliaria a qualidade deste produto?"})
-        feedback["stage"] = 2
+        if user_input in PRODUCTS:
+            feedback["product"] = user_input
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
+            st.session_state.chat_history.append({
+                "role": "assistant", 
+                "content": f"Ótimo! Você escolheu: {user_input}\n\nEm uma escala de 0 a 5, como você avalia a qualidade deste produto?\n(0 = Muito ruim, 5 = Excelente)"
+            })
+            feedback["stage"] = 2
+        else:
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
+            st.session_state.chat_history.append({
+                "role": "assistant", 
+                "content": "Por favor, selecione um dos produtos disponíveis na lista."
+            })
+            
     elif feedback["stage"] == 2:
         # Processar avaliação do produto
         try:
@@ -305,14 +449,24 @@ def process_chat_input(user_input):
             if 0 <= rating <= 5:
                 feedback["product_rating"] = rating
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
-                st.session_state.chat_history.append({"role": "assistant", "content": f"Obrigado pela avaliação de {rating}/5 para o produto! Agora, em uma escala de 0 a 5, como você avaliaria o prazo de entrega?"})
+                st.session_state.chat_history.append({
+                    "role": "assistant", 
+                    "content": f"Obrigado pela avaliação de {rating}/5 para o produto!\n\nAgora, em uma escala de 0 a 5, como você avalia o prazo de entrega?\n(0 = Muito ruim, 5 = Excelente)"
+                })
                 feedback["stage"] = 3
             else:
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
-                st.session_state.chat_history.append({"role": "assistant", "content": "Por favor, forneça uma avaliação entre 0 e 5."})
+                st.session_state.chat_history.append({
+                    "role": "assistant", 
+                    "content": "Por favor, forneça uma avaliação entre 0 e 5."
+                })
         except ValueError:
             st.session_state.chat_history.append({"role": "user", "content": user_input})
-            st.session_state.chat_history.append({"role": "assistant", "content": "Por favor, forneça um número entre 0 e 5 para sua avaliação."})
+            st.session_state.chat_history.append({
+                "role": "assistant", 
+                "content": "Por favor, forneça um número entre 0 e 5 para sua avaliação."
+            })
+            
     elif feedback["stage"] == 3:
         # Processar avaliação do prazo de entrega
         try:
@@ -320,147 +474,247 @@ def process_chat_input(user_input):
             if 0 <= rating <= 5:
                 feedback["delivery_rating"] = rating
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
-                st.session_state.chat_history.append({"role": "assistant", "content": f"Obrigado pela avaliação de {rating}/5 para o prazo de entrega! Você gostaria de adicionar algum comentário sobre sua experiência?"})
+                st.session_state.chat_history.append({
+                    "role": "assistant", 
+                    "content": f"Perfeito! Nota {rating}/5 para a entrega.\n\nPara finalizar, gostaria de deixar algum comentário adicional sobre sua experiência?"
+                })
                 feedback["stage"] = 4
             else:
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
-                st.session_state.chat_history.append({"role": "assistant", "content": "Por favor, forneça uma avaliação entre 0 e 5."})
+                st.session_state.chat_history.append({
+                    "role": "assistant", 
+                    "content": "Por favor, forneça uma avaliação entre 0 e 5."
+                })
         except ValueError:
             st.session_state.chat_history.append({"role": "user", "content": user_input})
-            st.session_state.chat_history.append({"role": "assistant", "content": "Por favor, forneça um número entre 0 e 5 para sua avaliação."})
+            st.session_state.chat_history.append({
+                "role": "assistant", 
+                "content": "Por favor, forneça um número entre 0 e 5 para sua avaliação."
+            })
+            
     elif feedback["stage"] == 4:
         # Processar comentário
-        feedback["comment"] = user_input
+        feedback["comment"] = user_input if user_input else "Sem comentários adicionais"
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         
         # Calcular média das avaliações
         avg_rating = (feedback["product_rating"] + feedback["delivery_rating"]) / 2
         
-        # Salvar feedback no banco de dados (agora com fila integrada)
-        save_feedback(st.session_state.user["id"], avg_rating, f"Produto: {feedback['product']} | Avaliação do produto: {feedback['product_rating']}/5 | Avaliação da entrega: {feedback['delivery_rating']}/5 | Comentário: {feedback['comment']}")
+        # Criar comentário estruturado
+        structured_comment = f"Produto: {feedback['product']} | Avaliação do produto: {feedback['product_rating']}/5 | Avaliação da entrega: {feedback['delivery_rating']}/5 | Comentário: {feedback['comment']}"
         
-        st.session_state.chat_history.append({"role": "assistant", "content": "Obrigado pelo seu feedback! Ele foi registrado com sucesso e adicionado à nossa fila de processamento. Deseja fornecer outro feedback? (sim/não)"})
+        # Salvar feedback no banco de dados
+        feedback_id = save_feedback(st.session_state.user["id"], avg_rating, structured_comment)
+        
+        # Mensagem de confirmação
+        confirmation_msg = f"✅ Feedback salvo com sucesso!\n\n📊 Resumo:\n• Produto: {feedback['product']}\n• Avaliação do produto: {feedback['product_rating']}/5\n• Avaliação da entrega: {feedback['delivery_rating']}/5\n• Média geral: {avg_rating:.1f}/5\n\nObrigado pelo seu feedback! 🙏\n\nDeseja fornecer outro feedback? (sim/não)"
+        
+        st.session_state.chat_history.append({"role": "assistant", "content": confirmation_msg})
         feedback["stage"] = 5
+        
     elif feedback["stage"] == 5:
         # Verificar se o usuário quer dar outro feedback
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         if user_input.lower() in ["sim", "s", "yes", "y"]:
-            st.session_state.chat_history.append({"role": "assistant", "content": "Ótimo! Qual produto você adquiriu recentemente?"})
-            st.session_state.current_feedback = {"stage": 1, "product": None, "product_rating": None, "delivery_rating": None, "comment": None}
+            st.session_state.chat_history.append({
+                "role": "assistant", 
+                "content": "Ótimo! Qual produto você gostaria de avaliar agora?"
+            })
+            st.session_state.current_feedback = {
+                "stage": 1, 
+                "product": None, 
+                "product_rating": None, 
+                "delivery_rating": None, 
+                "comment": None
+            }
         else:
-            st.session_state.chat_history.append({"role": "assistant", "content": "Obrigado por participar! Se quiser ver seus feedbacks anteriores, acesse a seção de Dashboard."})
-            st.session_state.current_feedback = {"stage": 0, "product": None, "product_rating": None, "delivery_rating": None, "comment": None}
+            st.session_state.chat_history.append({
+                "role": "assistant", 
+                "content": "Obrigado por participar! 😊\n\nSe quiser ver seus feedbacks anteriores, acesse a seção de **Dashboard**.\n\nPara ver a fila de processamento, acesse **Fila de Processamento**."
+            })
+            st.session_state.current_feedback = {
+                "stage": 0, 
+                "product": None, 
+                "product_rating": None, 
+                "delivery_rating": None, 
+                "comment": None
+            }
 
 # ==================== PÁGINAS ====================
 
-# Página de Login
 def login_page():
-    st.title("FeedSmart - Login")
+    """Renderiza a página de login e registro."""
+    st.title("🤖 FeedSmart")
+    st.subheader("Sistema Inteligente de Coleta de Feedback")
     
     tab1, tab2 = st.tabs(["Login", "Registrar"])
     
     with tab1:
-        username = st.text_input("Nome de usuário", key="login_username")
-        password = st.text_input("Senha", type="password", key="login_password")
-        
-        if st.button("Entrar"):
-            user = verify_login(username, password)
-            if user:
-                st.session_state.user = user
-                st.session_state.page = 'home'
-                st.rerun()
-            else:
-                st.error("Nome de usuário ou senha incorretos")
+        st.subheader("Fazer Login")
+        with st.form("login_form"):
+            username = st.text_input("Nome de usuário")
+            password = st.text_input("Senha", type="password")
+            submit_button = st.form_submit_button("Entrar")
+            
+            if submit_button:
+                if username and password:
+                    user = verify_login(username, password)
+                    if user:
+                        st.session_state.user = user
+                        st.session_state.page = 'home'
+                        st.success("Login realizado com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("Nome de usuário ou senha incorretos")
+                else:
+                    st.error("Preencha todos os campos")
     
     with tab2:
-        new_username = st.text_input("Nome de usuário", key="reg_username")
-        new_password = st.text_input("Senha", type="password", key="reg_password")
-        confirm_password = st.text_input("Confirmar senha", type="password")
-        name = st.text_input("Nome completo")
-        email = st.text_input("Email")
-        
-        if st.button("Registrar"):
-            if new_password != confirm_password:
-                st.error("As senhas não coincidem")
-            elif not (new_username and new_password and name and email):
-                st.error("Todos os campos são obrigatórios")
-            else:
-                if register_user(new_username, new_password, name, email):
-                    st.success("Registro concluído com sucesso! Faça login para continuar.")
+        st.subheader("Criar Conta")
+        with st.form("register_form"):
+            new_username = st.text_input("Nome de usuário", key="reg_username")
+            new_password = st.text_input("Senha", type="password", key="reg_password")
+            confirm_password = st.text_input("Confirmar senha", type="password")
+            name = st.text_input("Nome completo")
+            email = st.text_input("Email")
+            register_button = st.form_submit_button("Registrar")
+            
+            if register_button:
+                if new_password != confirm_password:
+                    st.error("As senhas não coincidem")
                 else:
-                    st.error("Nome de usuário já existe")
+                    success, message = register_user(new_username, new_password, name, email)
+                    if success:
+                        st.success(message)
+                    else:
+                        st.error(message)
 
-# Página inicial
 def home_page():
-    st.title(f"Bem-vindo, {st.session_state.user['name']}!")
+    """Renderiza a página inicial com informações e estatísticas."""
+    st.title(f"Bem-vindo, {st.session_state.user['name']}! 👋")
     
     # Barra lateral com navegação
     with st.sidebar:
-        st.title("Navegação")
-        st.button("Página Inicial", on_click=change_page, args=('home',))
-        st.button("Chatbot de Feedback", on_click=change_page, args=('chatbot',))
-        st.button("Dashboard", on_click=change_page, args=('dashboard',))
-        st.button("Fila de Processamento", on_click=change_page, args=('queue',))
-        st.button("Sair", on_click=logout)
+        st.title("🧭 Navegação")
+        if st.button("🏠 Página Inicial"):
+            change_page('home')
+        if st.button("🤖 Chatbot de Feedback"):
+            change_page('chatbot')
+        if st.button("📊 Dashboard"):
+            change_page('dashboard')
+        if st.button("🔄 Fila de Processamento"):
+            change_page('queue')
+        
+        st.divider()
+        if st.button("🚪 Sair"):
+            logout()
     
-    st.write("Este é um sistema de coleta de feedback através de um chatbot interativo.")
-    st.write("Utilize o menu lateral para navegar entre as diferentes seções do aplicativo.")
-    
-    st.subheader("Funcionalidades:")
     st.markdown("""
-    - **Chatbot de Feedback**: Interaja com nosso chatbot para fornecer avaliações de 0 a 5 e comentários.
-    - **Dashboard**: Visualize todos os seus feedbacks anteriores e estatísticas com ordenação inteligente.
-    - **Fila de Processamento**: Veja os feedbacks na fila de processamento organizados por prioridade.
+    ### 🎯 Sobre o FeedSmart
+    
+    Este é um sistema inteligente de coleta de feedback que utiliza:
+    - **Chatbot interativo** para uma experiência natural
+    - **Algoritmos avançados** para organização eficiente
+    - **Sistema de filas** com priorização automática
+    - **Análise visual** para insights valiosos
     """)
     
-    # Mostrar estatísticas rápidas
-    col1, col2, col3 = st.columns(3)
+    st.subheader("🚀 Funcionalidades Principais:")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        **🤖 Chatbot de Feedback**
+        - Conversa natural e intuitiva
+        - Avaliação de produtos e entrega
+        - Coleta de comentários detalhados
+        
+        **📊 Dashboard Analítico**
+        - Visualização de todos os feedbacks
+        - Gráficos de evolução temporal
+        - Ordenação inteligente (Merge Sort)
+        """)
+    
+    with col2:
+        st.markdown("""
+        **🔄 Fila de Processamento**
+        - Organização automática por prioridade
+        - Sistema FIFO (First In, First Out)
+        - Controles de processamento
+        
+        **🔐 Sistema Seguro**
+        - Autenticação criptografada
+        - Dados pessoais protegidos
+        - Sessões seguras
+        """)
+    
+    # Estatísticas rápidas
+    st.subheader("📈 Suas Estatísticas")
+    
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         queue_size = st.session_state.feedback_queue.size()
-        st.metric("Feedbacks na Fila", queue_size)
+        st.metric("🔄 Feedbacks na Fila", queue_size)
     
     with col2:
         feedbacks = get_user_feedbacks(st.session_state.user["id"])
         total_feedbacks = len(feedbacks)
-        st.metric("Total de Feedbacks", total_feedbacks)
+        st.metric("📝 Total de Feedbacks", total_feedbacks)
     
     with col3:
         if total_feedbacks > 0:
             avg_rating = feedbacks['rating'].mean()
-            st.metric("Avaliação Média", f"{avg_rating:.1f}/5")
+            st.metric("⭐ Avaliação Média", f"{avg_rating:.1f}/5")
         else:
-            st.metric("Avaliação Média", "N/A")
+            st.metric("⭐ Avaliação Média", "N/A")
+    
+    with col4:
+        if total_feedbacks > 0:
+            last_feedback = feedbacks.iloc[0]['timestamp']
+            last_date = pd.to_datetime(last_feedback).strftime('%d/%m/%Y')
+            st.metric("📅 Último Feedback", last_date)
+        else:
+            st.metric("📅 Último Feedback", "N/A")
+    
+    # Call to action
+    if total_feedbacks == 0:
+        st.info("🎯 **Comece agora!** Clique em 'Chatbot de Feedback' para registrar sua primeira avaliação.")
 
-def clear_chat_history():
-    """Limpa o histórico do chat e reinicia a conversa"""
-    st.session_state.chat_history = []
-    st.session_state.current_feedback = {"stage": 0, "product": None, "product_rating": None, "delivery_rating": None, "comment": None}
-
-# Página do chatbot
 def chatbot_page():
-    st.title("Chatbot de Feedback")
+    """Renderiza a interface do chatbot para coleta de feedback."""
+    st.title("🤖 Chatbot de Feedback")
     
     # Barra lateral com navegação
     with st.sidebar:
-        st.title("Navegação")
-        st.button("Página Inicial", on_click=change_page, args=('home',))
-        st.button("Chatbot de Feedback", on_click=change_page, args=('chatbot',))
-        st.button("Dashboard", on_click=change_page, args=('dashboard',))
-        st.button("Fila de Processamento", on_click=change_page, args=('queue',))
-        st.button("Sair", on_click=logout)
+        st.title("🧭 Navegação")
+        if st.button("🏠 Página Inicial"):
+            change_page('home')
+        if st.button("🤖 Chatbot de Feedback"):
+            change_page('chatbot')
+        if st.button("📊 Dashboard"):
+            change_page('dashboard')
+        if st.button("🔄 Fila de Processamento"):
+            change_page('queue')
         
         st.divider()
+        
+        st.subheader("🛠️ Controles")
         if st.button("🗑️ Limpar Histórico", help="Limpa todo o histórico da conversa"):
             clear_chat_history()
             st.success("Histórico limpo com sucesso!")
             st.rerun()
+        
+        st.divider()
+        if st.button("🚪 Sair"):
+            logout()
     
     # Iniciar conversa se for a primeira vez
     if len(st.session_state.chat_history) == 0:
         process_chat_input("")
     
-    # Exibir histórico de chat
+    # Container para o histórico do chat
     chat_container = st.container()
     with chat_container:
         for i, chat in enumerate(st.session_state.chat_history):
@@ -469,44 +723,127 @@ def chatbot_page():
             else:
                 message(chat["content"], is_user=False, key=f"msg_{i}")
     
-    # Input do usuário
-    if st.session_state.current_feedback["stage"] == 1:
-        # Mostrar seleção de produto
-        product_options = ["Camiseta", "Shorts", "Calça", "Tênis"]
-        user_input = st.selectbox("Selecione o produto:", product_options)
-        submit_button = st.button("Enviar")
+    # Interface de entrada baseada no estágio atual
+    feedback = st.session_state.current_feedback
+    
+    if feedback["stage"] == 1:
+        # Seleção de produto
+        st.subheader("Selecione o produto:")
+        col1, col2 = st.columns([3, 1])
         
-        if submit_button:
-            process_chat_input(user_input)
-            st.rerun()
+        with col1:
+            selected_product = st.selectbox(
+                "Escolha o produto que você adquiriu:",
+                [""] + PRODUCTS,
+                key="product_select"
+            )
+        
+        with col2:
+            st.write("")  # Espaçamento
+            if st.button("Enviar", key="send_product"):
+                if selected_product:
+                    process_chat_input(selected_product)
+                    st.rerun()
+                else:
+                    st.warning("Por favor, selecione um produto.")
+    
+    elif feedback["stage"] in [2, 3]:
+        # Avaliação (produto ou entrega)
+        stage_text = "produto" if feedback["stage"] == 2 else "entrega"
+        st.subheader(f"Avalie a qualidade do {stage_text}:")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            rating = st.selectbox(
+                f"Nota para {stage_text} (0-5):",
+                [""] + list(range(6)),
+                key=f"{stage_text}_rating_select"
+            )
+        
+        with col2:
+            st.write("")  # Espaçamento
+            if st.button("Enviar", key=f"send_{stage_text}_rating"):
+                if rating != "":
+                    process_chat_input(str(rating))
+                    st.rerun()
+                else:
+                    st.warning("Por favor, selecione uma avaliação.")
+    
+    elif feedback["stage"] == 4:
+        # Comentário
+        st.subheader("Comentário adicional:")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            comment = st.text_area(
+                "Deixe seu comentário (opcional):",
+                placeholder="Conte-nos mais sobre sua experiência...",
+                key="comment_input",
+                height=100
+            )
+        
+        with col2:
+            st.write("")  # Espaçamento
+            st.write("")  # Mais espaçamento
+            if st.button("Finalizar", key="send_comment"):
+                process_chat_input(comment)
+                st.rerun()
+    
+    elif feedback["stage"] == 5:
+        # Confirmação para novo feedback
+        st.subheader("Deseja dar outro feedback?")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("✅ Sim, novo feedback"):
+                process_chat_input("sim")
+                st.rerun()
+        
+        with col2:
+            if st.button("🏠 Voltar ao início"):
+                change_page('home')
+    
     else:
-        # Input de texto normal
+        # Input de texto padrão para outros casos
         user_input = st.text_input("Digite sua mensagem:", key="user_input")
         
         if st.button("Enviar") and user_input:
             process_chat_input(user_input)
             st.rerun()
 
-# Página de dashboard (ATUALIZADA)
 def dashboard_page():
-    st.title("Dashboard de Feedback")
+    """Renderiza o dashboard analítico com métricas e gráficos."""
+    st.title("📊 Dashboard Analítico")
     
     # Barra lateral com navegação
     with st.sidebar:
-        st.title("Navegação")
-        st.button("Página Inicial", on_click=change_page, args=('home',))
-        st.button("Chatbot de Feedback", on_click=change_page, args=('chatbot',))
-        st.button("Dashboard", on_click=change_page, args=('dashboard',))
-        st.button("Fila de Processamento", on_click=change_page, args=('queue',))
-        st.button("Sair", on_click=logout)
+        st.title("🧭 Navegação")
+        if st.button("🏠 Página Inicial"):
+            change_page('home')
+        if st.button("🤖 Chatbot de Feedback"):
+            change_page('chatbot')
+        if st.button("📊 Dashboard"):
+            change_page('dashboard')
+        if st.button("🔄 Fila de Processamento"):
+            change_page('queue')
+        
+        st.divider()
+        if st.button("🚪 Sair"):
+            logout()
     
     # Opções de ordenação
-    st.subheader("Opções de Visualização")
-    sort_option = st.selectbox(
-        "Ordenar feedbacks por:",
-        ["Data (mais recente)", "Avaliação (maior para menor)"],
-        key="sort_option"
-    )
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.subheader("Seus Feedbacks")
+    with col2:
+        sort_option = st.selectbox(
+            "Ordenar por:",
+            ["Data (mais recente)", "Avaliação (maior para menor)"],
+            key="sort_option"
+        )
     
     sort_method = 'rating' if 'Avaliação' in sort_option else 'timestamp'
     
@@ -514,177 +851,283 @@ def dashboard_page():
     feedbacks = get_user_feedbacks(st.session_state.user["id"], sort_method)
     
     if len(feedbacks) == 0:
-        st.info("Você ainda não forneceu nenhum feedback. Use o chatbot para começar!")
-    else:
-        # Mostrar estatísticas
-        st.subheader("Estatísticas de Feedback")
+        st.info("📝 Você ainda não tem feedbacks registrados.")
+        st.write("Vá para o **Chatbot de Feedback** para registrar sua primeira avaliação!")
         
-        col1, col2, col3 = st.columns(3)
+        if st.button("🤖 Ir para Chatbot"):
+            change_page('chatbot')
+    else:
+        # Calcular métricas
+        avg_rating = feedbacks['rating'].mean()
+        max_rating = feedbacks['rating'].max()
+        min_rating = feedbacks['rating'].min()
+        total_feedbacks = len(feedbacks)
+        
+        # Exibir métricas em cards
+        st.subheader("📈 Estatísticas Gerais")
+        
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            avg_rating = feedbacks['rating'].mean()
-            st.metric("Avaliação Média", f"{avg_rating:.1f}/5")
+            st.metric(
+                label="📈 Avaliação Média",
+                value=f"{avg_rating:.1f}/5",
+                delta=f"{avg_rating - 3:.1f}" if avg_rating != 3 else None
+            )
         
         with col2:
-            max_rating = feedbacks['rating'].max()
-            st.metric("Maior Avaliação", f"{max_rating:.1f}/5")
+            st.metric(
+                label="⭐ Maior Avaliação",
+                value=f"{max_rating:.1f}/5"
+            )
         
         with col3:
-            min_rating = feedbacks['rating'].min()
-            st.metric("Menor Avaliação", f"{min_rating:.1f}/5")
+            st.metric(
+                label="📉 Menor Avaliação",
+                value=f"{min_rating:.1f}/5"
+            )
         
-        # Gráfico de média de avaliações ao longo do tempo
+        with col4:
+            st.metric(
+                label="📝 Total de Feedbacks",
+                value=total_feedbacks
+            )
+        
+        st.divider()
+        
+        # Gráfico de evolução
         if len(feedbacks) > 1:
+            st.subheader("📈 Evolução das Avaliações")
+            
+            # Preparar dados para o gráfico
+            feedbacks_sorted = feedbacks.copy()
+            feedbacks_sorted['timestamp'] = pd.to_datetime(feedbacks_sorted['timestamp'])
+            feedbacks_sorted = feedbacks_sorted.sort_values('timestamp')
+            feedbacks_sorted['avg_rating_cumulative'] = feedbacks_sorted['rating'].expanding().mean()
+            
+            # Criar gráfico
             fig, ax = plt.subplots(figsize=(12, 6))
             
-            # Converter timestamp para datetime e ordenar por data
-            feedbacks_for_chart = feedbacks.copy()
-            feedbacks_for_chart['timestamp'] = pd.to_datetime(feedbacks_for_chart['timestamp'])
-            feedbacks_for_chart = feedbacks_for_chart.sort_values('timestamp')
+            # Linha principal
+            ax.plot(
+                range(len(feedbacks_sorted)), 
+                feedbacks_sorted['avg_rating_cumulative'], 
+                marker='o', 
+                linewidth=2, 
+                markersize=6, 
+                color='#1f77b4',
+                label='Média Cumulativa'
+            )
             
-            # Calcular média móvel das avaliações
-            feedbacks_for_chart['avg_rating_cumulative'] = feedbacks_for_chart['rating'].expanding().mean()
-            
-            # Plotar linha da média cumulativa
-            ax.plot(feedbacks_for_chart['timestamp'], feedbacks_for_chart['avg_rating_cumulative'], 
-                    marker='o', linewidth=2, markersize=6, color='#1f77b4')
-            
-            # Adicionar linha horizontal da média geral
-            ax.axhline(y=avg_rating, color='red', linestyle='--', alpha=0.7, 
-                       label=f'Média Geral: {avg_rating:.1f}')
+            # Linha de referência (média geral)
+            ax.axhline(
+                y=avg_rating, 
+                color='red', 
+                linestyle='--', 
+                alpha=0.7,
+                label=f'Média Geral ({avg_rating:.1f})'
+            )
             
             # Configurações do gráfico
-            ax.set_title('Evolução da Média de Avaliações ao Longo do Tempo', fontsize=14, fontweight='bold')
-            ax.set_xlabel('Data', fontsize=12)
-            ax.set_ylabel('Média de Avaliação', fontsize=12)
-            ax.set_ylim(0, 5.5)
+            ax.set_xlabel('Feedback #')
+            ax.set_ylabel('Avaliação')
+            ax.set_title('Evolução da Média de Avaliações ao Longo do Tempo')
             ax.grid(True, alpha=0.3)
             ax.legend()
+            ax.set_ylim(0, 5.5)
             
-            # Formatar eixo x para mostrar datas de forma mais legível
-            import matplotlib.dates as mdates
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(feedbacks)//5)))
-            plt.xticks(rotation=45)
-            
-            plt.tight_layout()
+            # Exibir gráfico
             st.pyplot(fig)
             
         else:
-            # Para apenas um feedback, mostrar um gráfico de gauge simples
+            # Gráfico de barras para feedback único
+            st.subheader("📊 Sua Avaliação")
+            
             fig, ax = plt.subplots(figsize=(8, 6))
             
-            # Criar um gráfico de barras horizontal simples para mostrar a média
-            categories = ['Sua Avaliação Média']
-            values = [avg_rating]
-            colors = ['#1f77b4']
+            categories = ['Sua Avaliação', 'Média Ideal']
+            values = [feedbacks.iloc[0]['rating'], 5.0]
+            colors = ['#1f77b4', '#90EE90']
             
-            bars = ax.barh(categories, values, color=colors, alpha=0.7)
-            ax.set_xlim(0, 5)
-            ax.set_xlabel('Avaliação (0-5)', fontsize=12)
-            ax.set_title('Sua Média de Avaliações', fontsize=14, fontweight='bold')
+            bars = ax.bar(categories, values, color=colors, alpha=0.7)
             
-            # Adicionar o valor na barra
+            # Adicionar valores nas barras
             for bar, value in zip(bars, values):
-                ax.text(value + 0.1, bar.get_y() + bar.get_height()/2, 
-                        f'{value:.1f}', va='center', fontsize=12, fontweight='bold')
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                       f'{value:.1f}', ha='center', va='bottom', fontsize=12)
             
-            ax.grid(True, alpha=0.3, axis='x')
-            plt.tight_layout()
+            ax.set_ylabel('Avaliação')
+            ax.set_title('Comparação com Avaliação Ideal')
+            ax.set_ylim(0, 5.5)
+            ax.grid(True, alpha=0.3, axis='y')
+            
             st.pyplot(fig)
         
+        st.divider()
+        
         # Tabela de feedbacks
-        st.subheader(f"Seus Feedbacks (Ordenados por {sort_option})")
+        st.subheader(f"📋 Histórico Detalhado (Ordenado por {sort_option})")
         
         # Preparar dados para exibição
-        display_df = feedbacks[['timestamp', 'rating', 'comment']].copy()
-        display_df.columns = ['Data/Hora', 'Avaliação', 'Comentário']
-        display_df['Data/Hora'] = pd.to_datetime(display_df['Data/Hora']).dt.strftime('%d/%m/%Y %H:%M')
+        display_df = feedbacks.copy()
+        display_df['timestamp'] = pd.to_datetime(display_df['timestamp']).dt.strftime('%d/%m/%Y %H:%M')
+        display_df = display_df.rename(columns={
+            'rating': 'Avaliação',
+            'comment': 'Comentário',
+            'timestamp': 'Data/Hora',
+            'priority': 'Prioridade'
+        })
         
-        st.dataframe(display_df, use_container_width=True)
+        # Mapear prioridade para labels
+        display_df['Prioridade'] = display_df['Prioridade'].map(PRIORITY_LABELS)
+        
+        # Exibir tabela
+        st.dataframe(
+            display_df[['Data/Hora', 'Avaliação', 'Prioridade', 'Comentário']],
+            use_container_width=True,
+            hide_index=True
+        )
 
-# Nova página da fila de processamento
 def queue_page():
-    st.title("Fila de Processamento de Feedback")
+    """Renderiza a página de gerenciamento da fila de processamento."""
+    st.title("🔄 Fila de Processamento")
     
     # Barra lateral com navegação
     with st.sidebar:
-        st.title("Navegação")
-        st.button("Página Inicial", on_click=change_page, args=('home',))
-        st.button("Chatbot de Feedback", on_click=change_page, args=('chatbot',))
-        st.button("Dashboard", on_click=change_page, args=('dashboard',))
-        st.button("Fila de Processamento", on_click=change_page, args=('queue',))
-        st.button("Sair", on_click=logout)
+        st.title("🧭 Navegação")
+        if st.button("🏠 Página Inicial"):
+            change_page('home')
+        if st.button("🤖 Chatbot de Feedback"):
+            change_page('chatbot')
+        if st.button("📊 Dashboard"):
+            change_page('dashboard')
+        if st.button("🔄 Fila de Processamento"):
+            change_page('queue')
+        
+        st.divider()
+        if st.button("🚪 Sair"):
+            logout()
     
     st.write("Esta página mostra os feedbacks na fila de processamento, organizados por prioridade.")
     
-    # Informações da fila
-    queue_size = st.session_state.feedback_queue.size()
+    queue = st.session_state.feedback_queue
     
-    col1, col2 = st.columns(2)
+    # Informações da fila
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
-        st.metric("Itens na Fila", queue_size)
+        st.metric("📊 Itens na Fila", queue.size())
     
     with col2:
-        if not st.session_state.feedback_queue.is_empty():
-            next_item = st.session_state.feedback_queue.peek()
-            st.metric("Próximo na Fila", f"Avaliação {next_item['rating']}/5")
+        next_item = queue.peek()
+        if next_item:
+            st.metric("⏭️ Próximo", f"Avaliação {next_item['rating']:.1f}/5")
+        else:
+            st.metric("⏭️ Próximo", "Fila vazia")
     
-    # Mostrar itens da fila
-    if queue_size > 0:
-        st.subheader("Itens na Fila de Processamento")
+    with col3:
+        if queue.size() > 0:
+            sorted_items = queue.get_sorted_by_priority()
+            highest_priority = sorted_items[0]['priority']
+            st.metric("🚨 Maior Prioridade", PRIORITY_LABELS.get(highest_priority, "N/A"))
+        else:
+            st.metric("🚨 Maior Prioridade", "N/A")
+    
+    st.divider()
+    
+    # Controles da fila
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("⚡ Processar Próximo", disabled=queue.is_empty()):
+            processed = queue.process_next()
+            if processed:
+                st.success(f"✅ Feedback processado: Avaliação {processed['rating']:.1f}/5")
+                st.rerun()
+    
+    with col2:
+        if st.button("🗑️ Limpar Fila", disabled=queue.is_empty()):
+            queue.clear()
+            st.success("🧹 Fila limpa com sucesso!")
+            st.rerun()
+    
+    st.divider()
+    
+    # Exibir itens da fila
+    if queue.size() > 0:
+        st.subheader("📋 Itens na Fila (Ordenados por Prioridade)")
         
-        queue_items = st.session_state.feedback_queue.get_all()
+        # Obter itens ordenados por prioridade
+        sorted_items = queue.get_sorted_by_priority()
         
         # Criar DataFrame para exibição
-        queue_df = pd.DataFrame(queue_items)
-        queue_df['timestamp'] = pd.to_datetime(queue_df['timestamp']).dt.strftime('%d/%m/%Y %H:%M')
-        
-        # Ordenar por prioridade (maior prioridade primeiro)
-        queue_df = queue_df.sort_values('priority', ascending=False)
+        queue_data = []
+        for item in sorted_items:
+            # Converter timestamp para formato legível
+            timestamp = datetime.datetime.strptime(item['timestamp'], "%Y-%m-%d %H:%M:%S")
+            formatted_time = timestamp.strftime("%d/%m/%Y %H:%M")
+            
+            queue_data.append({
+                "Data/Hora": formatted_time,
+                "Avaliação": f"{item['rating']:.1f}/5",
+                "Prioridade": PRIORITY_LABELS.get(item['priority'], "N/A"),
+                "Comentário": item['comment'][:50] + "..." if len(item['comment']) > 50 else item['comment']
+            })
         
         # Exibir tabela
-        display_columns = ['timestamp', 'rating', 'priority', 'comment']
-        display_df = queue_df[display_columns].copy()
-        display_df.columns = ['Data/Hora', 'Avaliação', 'Prioridade', 'Comentário']
+        queue_df = pd.DataFrame(queue_data)
+        st.dataframe(
+            queue_df,
+            use_container_width=True,
+            hide_index=True
+        )
         
-        st.dataframe(display_df, use_container_width=True)
+        # Estatísticas da fila
+        st.subheader("📊 Estatísticas da Fila")
         
-        # Botões de ação
-        col1, col2, col3 = st.columns(3)
+        # Contar por prioridade
+        priority_counts = {}
+        for item in sorted_items:
+            priority = item['priority']
+            priority_counts[priority] = priority_counts.get(priority, 0) + 1
         
-        with col1:
-            if st.button("Processar Próximo"):
-                processed = st.session_state.feedback_queue.process_next()
-                if processed:
-                    st.success(f"Feedback processado: Avaliação {processed['rating']}/5")
-                    st.rerun()
-                else:
-                    st.warning("Nenhum item na fila para processar")
-        
-        with col2:
-            if st.button("Limpar Fila"):
-                st.session_state.feedback_queue.clear()
-                st.success("Fila limpa com sucesso!")
-                st.rerun()
-        
-        with col3:
-            st.write(f"Total de itens: {queue_size}")
+        # Exibir contadores
+        cols = st.columns(5)
+        for i, (priority, label) in enumerate(PRIORITY_LABELS.items()):
+            with cols[i]:
+                count = priority_counts.get(priority, 0)
+                st.metric(label, count)
     
     else:
-        st.info("A fila de processamento está vazia. Adicione feedbacks através do chatbot!")
+        # Fila vazia
+        st.info("📭 A fila de processamento está vazia.")
+        st.write("Novos feedbacks aparecerão aqui automaticamente quando forem registrados no chatbot.")
+        
+        if st.button("🤖 Ir para Chatbot"):
+            change_page('chatbot')
 
 # ==================== RENDERIZAÇÃO PRINCIPAL ====================
 
-# Renderizar a página apropriada
-if st.session_state.user is None:
-    login_page()
-else:
-    if st.session_state.page == 'home':
-        home_page()
-    elif st.session_state.page == 'chatbot':
-        chatbot_page()
-    elif st.session_state.page == 'dashboard':
-        dashboard_page()
-    elif st.session_state.page == 'queue':
-        queue_page()
+def main():
+    """Função principal que controla o fluxo da aplicação."""
+    # Verificar autenticação
+    if st.session_state.user is None:
+        login_page()
+    else:
+        # Renderizar página atual
+        if st.session_state.page == 'home':
+            home_page()
+        elif st.session_state.page == 'chatbot':
+            chatbot_page()
+        elif st.session_state.page == 'dashboard':
+            dashboard_page()
+        elif st.session_state.page == 'queue':
+            queue_page()
+        else:
+            # Página padrão
+            home_page()
+
+# Executar aplicação
+if __name__ == "__main__":
+    main()
