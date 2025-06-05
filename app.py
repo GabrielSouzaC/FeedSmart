@@ -140,6 +140,159 @@ def merge_sort_by_rating(arr):
     # Extrair apenas os índices da lista ordenada
     return [item[1] for item in sorted_arr]
 
+# ==================== GRÁFICO PRODUTO VS ENTREGA ====================
+
+def extract_ratings_from_comments(feedbacks):
+    """
+    Extrai avaliações de produto e entrega dos comentários estruturados.
+    
+    Args:
+        feedbacks: DataFrame com feedbacks
+    
+    Returns:
+        tuple: (product_ratings, delivery_ratings)
+    """
+    product_ratings = []
+    delivery_ratings = []
+    
+    for comment in feedbacks['comment']:
+        # Padrão para extrair avaliações do comentário estruturado
+        product_match = re.search(r'Avaliação do produto: (\d+)/5', comment)
+        delivery_match = re.search(r'Avaliação da entrega: (\d+)/5', comment)
+        
+        if product_match and delivery_match:
+            product_ratings.append(int(product_match.group(1)))
+            delivery_ratings.append(int(delivery_match.group(1)))
+        else:
+            # Fallback: usar rating geral se não conseguir extrair
+            rating = feedbacks[feedbacks['comment'] == comment]['rating'].iloc[0]
+            product_ratings.append(rating)
+            delivery_ratings.append(rating)
+    
+    return product_ratings, delivery_ratings
+
+def create_product_vs_delivery_chart(feedbacks):
+    """
+    Cria um gráfico comparativo entre satisfação com produto e entrega.
+    
+    Args:
+        feedbacks: DataFrame com os feedbacks do usuário
+    
+    Returns:
+        tuple: (matplotlib.figure.Figure, avg_product, avg_delivery)
+    """
+    if feedbacks.empty:
+        return None, 0, 0
+    
+    # Extrair avaliações de produto e entrega
+    product_ratings, delivery_ratings = extract_ratings_from_comments(feedbacks)
+    
+    # Calcular médias
+    avg_product = np.mean(product_ratings)
+    avg_delivery = np.mean(delivery_ratings)
+    
+    # Criar figura com subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # === GRÁFICO 1: Comparação de Médias ===
+    categories = ['🛍️ Qualidade\ndos Produtos', '🚚 Prazo de\nEntrega']
+    averages = [avg_product, avg_delivery]
+    colors = ['#3498db', '#e74c3c']
+    
+    bars = ax1.bar(categories, averages, color=colors, alpha=0.8, width=0.6)
+    
+    # Adicionar valores nas barras
+    for bar, avg in zip(bars, averages):
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                f'{avg:.1f}/5', ha='center', va='bottom', fontsize=14, fontweight='bold')
+    
+    # Linha de referência (média geral)
+    overall_avg = (avg_product + avg_delivery) / 2
+    ax1.axhline(y=overall_avg, color='gray', linestyle='--', alpha=0.7, 
+                label=f'Média Geral: {overall_avg:.1f}/5')
+    
+    ax1.set_ylim(0, 5.5)
+    ax1.set_ylabel('Avaliação Média', fontsize=12)
+    ax1.set_title('📊 Produto vs Entrega - Comparação', fontsize=14, fontweight='bold')
+    ax1.grid(axis='y', alpha=0.3)
+    ax1.legend()
+    
+    # === GRÁFICO 2: Distribuição Detalhada ===
+    # Contar frequência de cada nota
+    product_counts = [product_ratings.count(i) for i in range(1, 6)]
+    delivery_counts = [delivery_ratings.count(i) for i in range(1, 6)]
+    
+    x = np.arange(1, 6)  # Notas de 1 a 5
+    width = 0.35
+    
+    bars1 = ax2.bar(x - width/2, product_counts, width, label='🛍️ Produto', 
+                    color='#3498db', alpha=0.8)
+    bars2 = ax2.bar(x + width/2, delivery_counts, width, label='🚚 Entrega', 
+                    color='#e74c3c', alpha=0.8)
+    
+    # Adicionar valores nas barras
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            if height > 0:  # Só mostrar se houver valor
+                ax2.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                        f'{int(height)}', ha='center', va='bottom', fontsize=10)
+    
+    ax2.set_xlabel('Avaliação (estrelas)', fontsize=12)
+    ax2.set_ylabel('Quantidade de Avaliações', fontsize=12)
+    ax2.set_title('📈 Distribuição de Notas', fontsize=14, fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([f'{i}⭐' for i in range(1, 6)])
+    ax2.legend()
+    ax2.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    return fig, avg_product, avg_delivery
+
+def create_insights_text(avg_product, avg_delivery):
+    """
+    Gera insights personalizados baseados nas avaliações.
+    
+    Args:
+        avg_product: Média de avaliação dos produtos
+        avg_delivery: Média de avaliação da entrega
+    
+    Returns:
+        dict: Dicionário com insights e recomendações
+    """
+    diff = abs(avg_product - avg_delivery)
+    
+    insights = {
+        'better_category': '',
+        'difference': diff,
+        'recommendation': '',
+        'status': ''
+    }
+    
+    if avg_product > avg_delivery:
+        insights['better_category'] = 'produtos'
+        insights['status'] = f"🛍️ **Produtos são seu ponto forte!** ({avg_product:.1f}/5 vs {avg_delivery:.1f}/5)"
+        if diff > 1.0:
+            insights['recommendation'] = "🚚 **Atenção:** Considere conversar com a loja sobre melhorias na entrega."
+        else:
+            insights['recommendation'] = "📦 A entrega pode melhorar um pouco, mas está no caminho certo."
+    
+    elif avg_delivery > avg_product:
+        insights['better_category'] = 'entrega'
+        insights['status'] = f"🚚 **Entrega é seu ponto forte!** ({avg_delivery:.1f}/5 vs {avg_product:.1f}/5)"
+        if diff > 1.0:
+            insights['recommendation'] = "🛍️ **Atenção:** Talvez seja hora de experimentar outros produtos da loja."
+        else:
+            insights['recommendation'] = "🎯 Os produtos podem melhorar, mas você está satisfeito no geral."
+    
+    else:
+        insights['better_category'] = 'equilibrado'
+        insights['status'] = f"⚖️ **Experiência equilibrada!** (Ambos com {avg_product:.1f}/5)"
+        insights['recommendation'] = "🎉 Parabéns! Você tem uma experiência consistente em ambas as áreas."
+    
+    return insights
+
 # ==================== BANCO DE DADOS ====================
 
 def init_db():
@@ -815,8 +968,8 @@ def chatbot_page():
             st.rerun()
 
 def dashboard_page():
-    """Renderiza o dashboard analítico com métricas e gráficos."""
-    st.title("📊 Dashboard Analítico")
+    """Renderiza o dashboard analítico com gráfico produto vs entrega."""
+    st.title("📊 Dashboard - Produto vs Entrega")
     
     # Barra lateral com navegação
     with st.sidebar:
@@ -834,21 +987,8 @@ def dashboard_page():
         if st.button("🚪 Sair"):
             logout()
     
-    # Opções de ordenação
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.subheader("Seus Feedbacks")
-    with col2:
-        sort_option = st.selectbox(
-            "Ordenar por:",
-            ["Data (mais recente)", "Avaliação (maior para menor)"],
-            key="sort_option"
-        )
-    
-    sort_method = 'rating' if 'Avaliação' in sort_option else 'timestamp'
-    
     # Obter feedbacks do usuário
-    feedbacks = get_user_feedbacks(st.session_state.user["id"], sort_method)
+    feedbacks = get_user_feedbacks(st.session_state.user["id"])
     
     if len(feedbacks) == 0:
         st.info("📝 Você ainda não tem feedbacks registrados.")
@@ -895,79 +1035,50 @@ def dashboard_page():
         
         st.divider()
         
-        # Gráfico de evolução
-        if len(feedbacks) > 1:
-            st.subheader("📈 Evolução das Avaliações")
-            
-            # Preparar dados para o gráfico
-            feedbacks_sorted = feedbacks.copy()
-            feedbacks_sorted['timestamp'] = pd.to_datetime(feedbacks_sorted['timestamp'])
-            feedbacks_sorted = feedbacks_sorted.sort_values('timestamp')
-            feedbacks_sorted['avg_rating_cumulative'] = feedbacks_sorted['rating'].expanding().mean()
-            
-            # Criar gráfico
-            fig, ax = plt.subplots(figsize=(12, 6))
-            
-            # Linha principal
-            ax.plot(
-                range(len(feedbacks_sorted)), 
-                feedbacks_sorted['avg_rating_cumulative'], 
-                marker='o', 
-                linewidth=2, 
-                markersize=6, 
-                color='#1f77b4',
-                label='Média Cumulativa'
-            )
-            
-            # Linha de referência (média geral)
-            ax.axhline(
-                y=avg_rating, 
-                color='red', 
-                linestyle='--', 
-                alpha=0.7,
-                label=f'Média Geral ({avg_rating:.1f})'
-            )
-            
-            # Configurações do gráfico
-            ax.set_xlabel('Feedback #')
-            ax.set_ylabel('Avaliação')
-            ax.set_title('Evolução da Média de Avaliações ao Longo do Tempo')
-            ax.grid(True, alpha=0.3)
-            ax.legend()
-            ax.set_ylim(0, 5.5)
-            
-            # Exibir gráfico
+        # === GRÁFICO PRODUTO VS ENTREGA ===
+        st.subheader("🛍️ vs 🚚 Análise Comparativa")
+        
+        # Criar e exibir gráfico
+        result = create_product_vs_delivery_chart(feedbacks)
+        if result[0] is not None:
+            fig, avg_product, avg_delivery = result
             st.pyplot(fig)
             
+            # Métricas principais
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("🛍️ Produtos", f"{avg_product:.1f}/5", 
+                         delta=f"{avg_product - 3:.1f}" if avg_product != 3 else None)
+            
+            with col2:
+                st.metric("🚚 Entrega", f"{avg_delivery:.1f}/5",
+                         delta=f"{avg_delivery - 3:.1f}" if avg_delivery != 3 else None)
+            
+            with col3:
+                overall = (avg_product + avg_delivery) / 2
+                st.metric("📊 Média Geral", f"{overall:.1f}/5")
+            
+            # Insights personalizados
+            st.subheader("🔍 Seus Insights Personalizados")
+            
+            insights = create_insights_text(avg_product, avg_delivery)
+            
+            st.info(insights['status'])
+            st.write(f"💡 **Recomendação:** {insights['recommendation']}")
+            
+            # Análise adicional
+            if insights['difference'] > 0.5:
+                st.warning(f"⚠️ **Atenção:** Há uma diferença significativa de {insights['difference']:.1f} pontos entre as categorias.")
+            else:
+                st.success("✅ **Ótimo:** Sua experiência é consistente em ambas as áreas!")
         else:
-            # Gráfico de barras para feedback único
-            st.subheader("📊 Sua Avaliação")
-            
-            fig, ax = plt.subplots(figsize=(8, 6))
-            
-            categories = ['Sua Avaliação', 'Média Ideal']
-            values = [feedbacks.iloc[0]['rating'], 5.0]
-            colors = ['#1f77b4', '#90EE90']
-            
-            bars = ax.bar(categories, values, color=colors, alpha=0.7)
-            
-            # Adicionar valores nas barras
-            for bar, value in zip(bars, values):
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
-                       f'{value:.1f}', ha='center', va='bottom', fontsize=12)
-            
-            ax.set_ylabel('Avaliação')
-            ax.set_title('Comparação com Avaliação Ideal')
-            ax.set_ylim(0, 5.5)
-            ax.grid(True, alpha=0.3, axis='y')
-            
-            st.pyplot(fig)
+            st.warning("Não foi possível extrair dados de produto e entrega dos comentários.")
         
         st.divider()
         
         # Tabela de feedbacks
-        st.subheader(f"📋 Histórico Detalhado (Ordenado por {sort_option})")
+        st.subheader("📋 Histórico Detalhado")
         
         # Preparar dados para exibição
         display_df = feedbacks.copy()
